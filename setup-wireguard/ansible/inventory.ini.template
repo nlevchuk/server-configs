@@ -1,0 +1,14 @@
+[server]
+<IP>
+
+[server:vars]
+peers="2"
+server_port="51820"
+timezone="UTC"
+interface="eth0"
+peer_dns="1.1.1.1"
+allowed_ips="0.0.0.0/0,::/0"
+internal_subnet="10.6.1.0"
+config_dir="/etc/wireguard"
+docker_pkg="docker.io"
+wg_image="lscr.io/linuxserver/wireguard:latest"

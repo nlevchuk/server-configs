@@ -1,0 +1,125 @@
+- name: WireGuard on Ubuntu via Docker (linuxserver/wireguard)
+  hosts: server
+  become: true
+  gather_facts: true
+  remote_user: ubuntu
+
+  pre_tasks:
+    - name: Update apt cache (fast)
+      ansible.builtin.apt:
+        update_cache: yes
+        cache_valid_time: 3600
+
+    - name: Upgrade packages (safe)
+      ansible.builtin.apt:
+        upgrade: safe
+      register: upgrade_result
+      notify: Reboot if kernel updated
+
+  tasks:
+    - name: Ensure base packages (Docker + helpers) are installed
+      ansible.builtin.apt:
+        name:
+          - "{{ docker_pkg }}"
+          - python3-pip
+          - wireguard-tools      # wg, wg-quick; handy for debugging
+        state: present
+
+    # - name: Install docker SDK for Python (lets docker_container work)
+    #   ansible.builtin.pip:
+    #     name: docker
+    #     state: present
+
+    - name: Enable & start Docker
+      ansible.builtin.systemd:
+        name: docker
+        enabled: true
+        state: started
+
+    - name: Ensure the 'ubuntu' user can use docker (optional)
+      ansible.builtin.user:
+        name: ubuntu
+        groups: docker
+        append: true
+      when: ansible_facts['distribution'] == 'Ubuntu'
+
+    # --- Kernel / networking prep ---
+    - name: Ensure TUN kernel module is loaded
+      ansible.builtin.modprobe:
+        name: tun
+        state: present
+
+    - name: Ensure WireGuard (kernel) module is attempted (harmless if built-in)
+      ansible.builtin.modprobe:
+        name: wireguard
+        state: present
+      ignore_errors: true
+
+    - name: Enable IPv4 forwarding (runtime)
+      ansible.builtin.command: sysctl -w net.ipv4.ip_forward=1
+      register: result_ipv4
+      changed_when: "'=1' in result_ipv4.stdout or '=1' in result_ipv4.stderr"
+
+    - name: Enable IPv6 forwarding (runtime)
+      ansible.builtin.command: sysctl -w net.ipv6.conf.all.forwarding=1
+      register: result_ipv6
+      changed_when: "'=1' in result_ipv6.stdout or '=1' in result_ipv6.stderr"
+
+    - name: Persist forwarding + src_valid_mark
+      ansible.builtin.sysctl:
+        name: "{{ item.name }}"
+        value: "{{ item.value }}"
+        state: present
+        sysctl_set: true
+        reload: true
+      loop:
+        - { name: "net.ipv4.ip_forward", value: "1" }
+        - { name: "net.ipv6.conf.all.forwarding", value: "1" }
+        - { name: "net.ipv4.conf.all.src_valid_mark", value: "1" }
+
+    - name: Ensure WireGuard config directory exists on host
+      ansible.builtin.file:
+        path: "{{ config_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0700"
+
+    # ---- Run linuxserver/wireguard container ----
+    - name: Launch WireGuard container
+      community.docker.docker_container:
+        name: wireguard
+        image: "{{ wg_image }}"
+        pull: true
+        restart_policy: unless-stopped
+        env:
+          PUID: "1000"
+          PGID: "1000"
+          TZ: "{{ timezone }}"
+          SERVERURL: "{{ ansible_host }}"
+          SERVERPORT: "{{ server_port }}"
+          PEERS: "{{ peers }}"
+          PEERDNS: "{{ peer_dns }}"
+          ALLOWEDIPS: "{{ allowed_ips }}"
+          # INTERNAL_SUBNET: "{{ internal_subnet }}"
+          # INTERFACE: "{{ interface }}"
+          # LOG_CONFS: "false"
+        devices:
+          - "/dev/net/tun:/dev/net/tun"
+        capabilities:
+          - NET_ADMIN
+          - SYS_MODULE
+        privileged: false
+        published_ports:
+          - "{{ server_port }}:{{ server_port }}/udp"
+        volumes:
+          - "{{ config_dir }}:/config"
+
+  handlers:
+    - name: Reboot if kernel updated
+      ansible.builtin.reboot:
+        msg: "Reboot initiated by Ansible after kernel/libs update"
+        connect_timeout: 30
+        reboot_timeout: 600
+        pre_reboot_delay: 0
+        post_reboot_delay: 10
