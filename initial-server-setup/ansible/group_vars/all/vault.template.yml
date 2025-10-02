@@ -1,0 +1,2 @@
+user_password: <PASSWORD>
+ansible_become_password: <PASSWORD>

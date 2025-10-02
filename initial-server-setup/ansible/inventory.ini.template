@@ -1,0 +1,5 @@
+[server]
+<IP>
+
+[server:vars]
+user_name=<USER>

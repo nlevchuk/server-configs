@@ -1,0 +1,70 @@
+# https://www.digitalocean.com/community/tutorials/how-to-install-and-use-docker-on-ubuntu-22-04
+- hosts: server
+
+  remote_user: slan
+
+  vars:
+    gpg_file_path: /usr/share/keyrings/docker-archive-keyring.gpg
+    apt_source_file_path: /etc/apt/sources.list.d/docker.list
+  vars_files:
+    - group_vars/all/vault.yml
+
+  tasks:
+    - name: Install required packages
+      ansible.builtin.apt:
+        name:
+          - apt-transport-https
+          - ca-certificates
+          - curl
+          - software-properties-common
+        state: present
+        update_cache: true
+      become: yes
+
+    - name: Check if the GPG file exists
+      ansible.builtin.stat:
+        path: "{{ gpg_file_path }}"
+      register: gpg_file_status
+
+    - name: Add the GPG key for the official Docker repository
+      ansible.builtin.shell: |
+        curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o {{ gpg_file_path }}
+      become: yes
+      when: not gpg_file_status.stat.exists
+
+    - name: Check if the APT source file exists
+      ansible.builtin.stat:
+        path: "{{ apt_source_file_path }}"
+      register: apt_source_file_status
+
+    - name: Add the Docker repository to APT sources
+      ansible.builtin.shell: |
+        echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | tee {{ apt_source_file_path }} > /dev/null
+      become: yes
+      when: not apt_source_file_status.stat.exists
+
+    - name: Update APT
+      command: apt update
+      become: yes
+
+    - name: Show APT cache policy about docker-ce
+      command: apt-cache policy docker-ce
+      register: command_output
+
+    - name: Display the previous task output
+      ansible.builtin.debug:
+        var: command_output.stdout
+
+    - name: Install Docker CE
+      ansible.builtin.apt:
+        name: docker-ce
+        state: present
+        update_cache: yes
+      become: yes
+
+    - name: Add user to the docker group
+      user:
+        name: "{{ user_name }}"
+        groups: docker
+        append: yes
+      become: yes
